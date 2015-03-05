@@ -343,11 +343,11 @@ def command_parse():
     parser.add_option("--max_mag", action="store",
                       dest="max_mag", help=helpmsg)
 
-    helpmsg = "minimum depth. [Default: +10.0 (above the surface!)]"
+    helpmsg = "minimum depth in km. [Default: -10.0 (above the surface!)]"
     parser.add_option("--min_depth", action="store",
                       dest="min_depth", help=helpmsg)
 
-    helpmsg = "maximum depth. [Default: -6000.0]"
+    helpmsg = "maximum depth in km. [Default: +6000.0]"
     parser.add_option("--max_depth", action="store",
                       dest="max_depth", help=helpmsg)
 
@@ -4008,9 +4008,9 @@ def plot_se_ray(input, ls_saved_stas):
                     input['evlatmax'] or \
                not input['evlonmin'] <= float(ls_stas[0][10]) <= \
                        input['evlonmax'] or \
-               not input['max_depth'] <= float(ls_stas[0][11]) <= \
+               not input['min_depth'] <= float(ls_stas[0][11]) <= \
                        input['min_depth'] or \
-               not input['min_mag'] <= float(ls_stas[0][12]) \
+               not input['max_mag'] <= float(ls_stas[0][12]) \
                        <= input['max_mag']:
                 continue
 
@@ -4647,9 +4647,9 @@ def rm_duplicate(all_sta_avail, address):
     stas_update.sort()
     print '------------------------------------------'
     print 'Info:'
-    print 'Number of all saved stations:     %s' % len(id_all_saved_stas)
-    print 'Number of all available stations: %s' % len(id_avai_stas)
-    print 'Number of stations to update for: %s' % len(stas_update)
+    print 'Number of all saved channels:     %s' % len(id_all_saved_stas)
+    print 'Number of all available channels: %s' % len(id_avai_stas)
+    print 'Number of channels to update for: %s' % len(stas_update)
     print '------------------------------------------'
 
     return stas_update
@@ -5239,7 +5239,7 @@ def main():
         size = getFolderSize(input['datapath'])
         size /= (1024.**2)
         print "Info:"
-        print "* The storing directory contains %s MB of data." \
+        print "* Storing directory contains %s MB of data." \
             % "{:.3f}".format( float(size ) )
         print input['datapath']
         print "\n* Total time of execution: %s (h:m:s)" \
