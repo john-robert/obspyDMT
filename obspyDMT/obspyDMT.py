@@ -20,6 +20,7 @@ from __future__ import with_statement
 import copy
 from datetime import datetime, timedelta
 from collections import OrderedDict
+from distutils.util import strtobool
 import fileinput
 import fnmatch
 import glob
@@ -141,12 +142,8 @@ def obspyDMT(**kwargs):
         plot_xml_response(input)
 
     # ------------------Getting List of Events/Continuous requests------
-    if input['get_events'] == 'Y':
-        if get_Events(input, request='event-based') == 0:
+    if get_Events(input) == -12345:
             return
-
-    if input['get_continuous'] == 'Y':
-        get_Events(input, request='continuous')
 
     # ------------------Seismicity--------------------------------------
     if input['seismicity'] == 'Y':
@@ -293,26 +290,38 @@ def command_parse():
               "[Default: '(P, Pdiff, PKIKP)']"
     parser.add_option("--phases", action="store",
                       dest="phases", help=helpmsg)
-
-    helpmsg = "user can interactively select events of retrieved event " \
-              "catalog"
-    parser.add_option("--user_select_event", action="store_true",
-                      dest="user_select_event", help=helpmsg)
                       
     helpmsg = "read in an existing event catalog and proceed. " \
               "Currently supported data formats: " \
               "'QUAKEML', 'MCHEDR' e.g.: --read_catalog 'path/to/file'"
     parser.add_option("--read_catalog", action="store",
                       dest="read_catalog", help=helpmsg)
+                      
+    helpmsg = "user can interactively select events of event catalog"
+    parser.add_option("--user_select_event", action="store_true",
+                      dest="user_select_event", help=helpmsg)
+    
+    helpmsg = "read in event catalogs and merge them into one, delete multiple" \
+              "(identical) events and sort catalog with recent earthquakes" \
+              "first (see \"--reverse\" option). Currently supported catalog" \
+              "formats: 'QUAKEML', 'MCHEDR' e.g.: --merge_catalogs 'path/to/file1"\
+              "path/to/file2' .."
+    parser.add_option("--merge_catalogs", action="store",
+                      dest="merge_catalogs", help=helpmsg)
+                      
+    helpmsg = "if used, reverse order of catalog." \
+              "[Default: recent earthquakes first]"
+    parser.add_option("--reverse", action="store_true",
+                      dest="reverse", help=helpmsg)
 
     helpmsg = "start time, syntax: Y-M-D-H-M-S " \
-              "(eg: '2010-01-01-00-00-00') or just " \
+              "(e.g.: '2010-01-01-00-00-00') or just " \
               "Y-M-D [Default: 10 days ago]"
     parser.add_option("--min_date", action="store",
                       dest="min_date", help=helpmsg)
 
     helpmsg = "end time, syntax: Y-M-D-H-M-S " \
-              "(eg: '2011-01-01-00-00-00') or just " \
+              "(e.g.: '2011-01-01-00-00-00') or just " \
               "Y-M-D [Default: 5 days ago]"
     parser.add_option("--max_date", action="store",
                       dest="max_date", help=helpmsg)
@@ -343,7 +352,7 @@ def command_parse():
     parser.add_option("--max_mag", action="store",
                       dest="max_mag", help=helpmsg)
 
-    helpmsg = "minimum depth in km. [Default: -10.0 (above the surface!)]"
+    helpmsg = "minimum depth in km. [Default: -10.0 (above the surface)]"
     parser.add_option("--min_depth", action="store",
                       dest="min_depth", help=helpmsg)
 
@@ -383,14 +392,9 @@ def command_parse():
     parser.add_option("--depth_bins_seismicity", action="store",
                       dest="depth_bins_seismicity", help=helpmsg)
 
-    helpmsg = "event-based request " \
-              "(please refer to the tutorial). [Default: 'Y']"
-    parser.add_option("--get_events", action="store",
-                      dest="get_events", help=helpmsg)
-
-    helpmsg = "continuous request (please refer to the tutorial)."
+    helpmsg = "continuous request of data. [Default: event-based]"
     parser.add_option("--continuous", action="store_true",
-                      dest="get_continuous", help=helpmsg)
+                      dest="continuous", help=helpmsg)
 
     helpmsg = "time interval for dividing the continuous request. " \
               "[Default: 86400 sec (1 day)]"
@@ -521,7 +525,7 @@ def command_parse():
                       dest="offset", help=helpmsg)
 
     helpmsg = "identity code restriction, syntax: " \
-              "net.sta.loc.cha (eg: TA.*.*.BHZ to search for " \
+              "net.sta.loc.cha (e.g.: TA.*.*.BHZ to search for " \
               "all BHZ channels in TA network). [Default: *.*.*.*]"
     parser.add_option("--identity", action="store",
                       dest="identity", help=helpmsg)
@@ -559,7 +563,7 @@ def command_parse():
                       dest="station_circle", help=helpmsg)
 
     helpmsg = "test the program for the desired number of requests, " \
-              "eg: '--test 10' will test the program for 10 " \
+              "e.g.: '--test 10' will test the program for 10 " \
               "requests. [Default: 'N']"
     parser.add_option("--test", action="store",
                       dest="test", help=helpmsg)
@@ -786,7 +790,7 @@ def command_parse():
                       dest="plotxml_dir", help=helpmsg)
 
     helpmsg = "datetime to be used for plotting the transfer function," \
-              "syntax: Y-M-D-H-M-S (eg: '2011-01-01-00-00-00') or just " \
+              "syntax: Y-M-D-H-M-S (e.g.: '2011-01-01-00-00-00') or just " \
               "Y-M-D. If this is not set, the starting date of the " \
               "stationXML will be used instead!"
     parser.add_option("--plotxml_date", action="store",
@@ -877,10 +881,11 @@ def read_input_command(parser, **kwargs):
              'event_url': 'IRIS',
              'event_catalog': None,
              'read_catalog' : 'N',
+             'files' : False,
              'mag_type': None,
              'min_mag': 5.5, 'max_mag': 9.9,
              'min_depth': -10.0, 'max_depth': +6000.0,
-             'get_events': 'Y',
+             'request': 'event-based',
              'interval': 3600*24,
              'preset_cont': 0,
              'offset_cont': 0,
@@ -1153,28 +1158,47 @@ def read_input_command(parser, **kwargs):
     input['plotxml_allstages'] = options.plotxml_allstages
     input['plotxml_map_compare'] = options.plotxml_map_compare
     input['datapath'] = options.datapath
+    
     if options.cut_time_phase:
         input['cut_time_phase'] = True
     else:
         input['cut_time_phase'] = False
+        
     if options.phases:
     	phases = options.phases.replace(',',' ')
-    	phases = phases.replace('\'','')
+    	phases = phases.replace('\'','').replace('"','')
     	phases = phases.replace('(','').replace(')','')
     	phases = phases.replace('[','').replace(']','')
     	phases = phases.split()
         input['phases'] = phases
     else:
     	input['phases'] = ('P', 'Pdiff', 'PKIKP')
+    	
     input['min_date'] = str(UTCDateTime(options.min_date))
     input['max_date'] = str(UTCDateTime(options.max_date))
     input['event_url'] = options.event_url.upper()
+    
     if options.event_catalog:
         input['event_catalog'] = options.event_catalog.upper()
+        
     if options.read_catalog:
         input['read_catalog'] = options.read_catalog
     else:
         input['read_catalog'] = 'N'
+        
+    if options.merge_catalogs:
+    	files = options.merge_catalogs.replace(',',' ')
+    	files = files.replace('\'','').replace('"','')
+    	files = files.replace('(','').replace(')','')
+    	files = files.replace('[','').replace(']','')
+    	files = files.split()
+    	input['files'] = files
+    
+    if options.reverse: 
+    	input['reverse'] = False
+    else:
+    	input['reverse'] = True
+    	
     input['mag_type'] = options.mag_type
     input['min_mag'] = float(options.min_mag)
     input['max_mag'] = float(options.max_mag)
@@ -1192,21 +1216,20 @@ def read_input_command(parser, **kwargs):
     input['offset'] = float(options.offset)
     input['max_result'] = int(options.max_result)
     input['depth_bins_seismicity'] = int(options.depth_bins_seismicity)
+    
     if options.user_select_event:
         input['user_select_event'] = 'Y'
     else:
         input['user_select_event'] = 'N'
+        
     if options.seismicity:
         input['seismicity'] = 'Y'
     else:
         input['seismicity'] = 'N'
-    input['get_events'] = options.get_events
-    if options.get_continuous:
-        input['plot_all_events'] = None
-        input['get_events'] = 'N'
-        input['get_continuous'] = 'Y'
-    else:
-        input['get_continuous'] = 'N'
+        
+    if options.continuous:
+    	input['request'] = 'continuous'
+        
     input['interval'] = float(options.interval)
     input['preset_cont'] = float(options.preset_cont)
     input['offset_cont'] = float(options.offset_cont)
@@ -1335,7 +1358,7 @@ def read_input_command(parser, **kwargs):
     input['email'] = options.email
 
     # --------------Changing relevant options for some specific options
-    if input['get_continuous'] == 'N':
+    if input['request'] == 'event-based':
         input['fdsn_merge_auto'] = 'N'
         input['arc_merge_auto'] = 'N'
     else:
@@ -1349,8 +1372,7 @@ def read_input_command(parser, **kwargs):
                  'plot_ray_gmt', 'plot_epi', 'plot_dt']:
         if input[opts] != 'N':
             input['datapath'] = input[opts]
-            input['get_events'] = 'N'
-            input['get_continuous'] = 'N'
+            input['request'] = False
             input['FDSN'] = 'N'
             input['ArcLink'] = 'N'
             input['fdsn_ic_auto'] = 'N'
@@ -1366,12 +1388,12 @@ def read_input_command(parser, **kwargs):
         input['fdsn_merge_auto'] = 'N'
         input['arc_merge_auto'] = 'N'
         input['plot_all_events'] = True
-        if options.identity or options.get_continuous:
+        if options.identity or options.continuous:
             input['waveform'] = 'N'
     else:
         input['plot_all_events'] = False
 
-    if options.event_info and options.get_continuous:
+    if options.event_info and options.continuous:
         input['plot_all_events'] = False
 
     if options.seismicity:
@@ -1766,47 +1788,47 @@ def convert_xml_paz(xml_response, output):
 # ##################### get_Events ######################################
 
 
-def get_Events(input, request):
+def get_Events(input):
     """
-    Getting list of events from IRIS or NERIES...
+    Getting list of events from IRIS or NERIES ..
+    :param input:
+    :return: events
     """
     
     global events
     t_event_1 = time.time()
 
-    # request can be 'event-based' or continuous
-    try:
-        events, catalog, successful_read = events_info(request)
-    except Exception, e:
+    # get events and catalog based on input['request'] (event-based/continuous)
+    try:    
+        events, catalog = events_info(input) 
+        if events == -12345 and catalog == -12345:
+            return -12345
+    except Exception as e:
         print 'WARNING: %s' % e
-        return 0
+        return -12345
 
-    # output shell
-    spaces, events2, header = event_spaces(events=events, request=request)
-    header_template = ['{:<'+str(e+2)+'}' for e in spaces]
-    row_format = '{}'.format(''.join(header_template))
+    # output catalog-table to shell
+    spaces, events2, header = event_spaces(events=events)
+    for i in range(len(spaces)):			
+    	if spaces[i] > 0 and spaces[i]+2 <= len(header[i]):
+    		spaces[i] = spaces[i] + (len(header[i])-(spaces[i]+2)) + 1
+    template = ['{:<'+str(e+2)+'}' for e in spaces]
+    row_format = '{}'.format(''.join(template))
 
     if input['user_select_event'] == 'Y':
-
         print '\n' + row_format.format(*header)
         print 80 * '-'
         for i in range(len(events2)):
             print (row_format.format(*events2[i].values())).rstrip()
         print 80 * '-' + '\n' 
-        garbage = delete_events(events=events, catalog=catalog)
-
+        events, catalog = delete_events(events, catalog)
     else:
-        garbage = '0'
-        if len(events) == 0: 
-            pass
-
-        elif len(events) <= 50:
+        if len(events) <= 50: 
             print '\n' + row_format.format(*header)
             print 80 * '-'
             for i in range(len(events2)):
                 print (row_format.format(*events2[i].values())).rstrip()
             print 80 * '-' + '\n' 
-            
         else:
             print '\n' + row_format.format(*header)
             print 80 * '-'
@@ -1819,19 +1841,17 @@ def get_Events(input, request):
             print (row_format.format(*events2[-1].values())).rstrip()
             print 80 * '-' + '\n'
 
-    if len(events) == 0:
-        return 0
-
-    # if read in event catalog, define variables new which determine
-    # the name of the folder where results will be stored. (Other-
-    # wise folder is named after defaults (10 & 5 days ago)). For
-    # renaming use max and min from quakes of read catalog
-    if (input['read_catalog'] != 'N' and successful_read == 1) \
-            or len(garbage) != 0:
-        input['max_date'] = str(max([e['datetime'] for e in events]))
-        input['min_date'] = str(min([e['datetime'] for e in events]))
-        input['max_mag'] = str(max([e['magnitude'] for e in events]))
-        input['min_mag'] = str(min([e['magnitude'] for e in events]))
+    # define variables new which determine the name of the folder where results 
+    # will be stored (otherwise folder is named after defaults 10 & 5 days ago
+    # in case catalog is read or folder is not accordant if events were deleted)
+    # !! ALL folders will ALWAYS named after these scheme regardless if search-
+    # parameters (e.g. dates, magnitudes) were different (lower/higher limits) !
+    # user may be irritated, however, in logger_command search-paras are stored
+    # for renaming use max and min from quakes of actual catalog
+    input['max_date'] = str(max([e['datetime'] for e in events]))
+    input['min_date'] = str(min([e['datetime'] for e in events]))
+    input['max_mag'] = str(max([e['magnitude'] for e in events]))
+    input['min_mag'] = str(min([e['magnitude'] for e in events]))
 
     print 'Number of event(s): %s' % len(events)
     print 'Time for retrieving and saving the event info: %s' \
@@ -1864,7 +1884,7 @@ def get_Events(input, request):
                  os.path.join(eventpath, 'EVENTS-INFO', 'logger_command.txt'),
                  inputs=input)
 
-    # output catalogue as ASCII
+    # output catalog as ASCII
     Event_cat = \
         open(os.path.join(eventpath, 'EVENTS-INFO', 'catalog.txt'), 'a+')
     st_argus = 'Command line:\n-------------\n'
@@ -1888,7 +1908,6 @@ def get_Events(input, request):
     Event_cat.writelines('max depth: %s\n' % input['max_depth'])
     Event_cat.writelines('\n\n-------------------------------------\n')
     Event_cat.close()
-
     for i in range(len(events)):
         Event_cat = open(os.path.join(eventpath, 'EVENTS-INFO',
                                       'catalog.txt'), 'a')
@@ -1914,16 +1933,14 @@ def get_Events(input, request):
     pickle.dump(events, Event_file)
     Event_file.close()
 
-    # output catalogue as ASCII but in table form
+    # output catalog as ASCII but in table form
     try:
         st_argus = 'Command line:\n-------------\n'
         for item in sys.argv:
             st_argus += item + ' '
         st_argus += '\n'    
-        Event_table = \
-            open(os.path.join(eventpath,
-                              'EVENTS-INFO', 'catalog_table.txt'), 'w')
-        
+        Event_table = open(os.path.join(eventpath,\
+                           'EVENTS-INFO', 'catalog_table.txt'), 'w')
         Event_table.writelines(st_argus)
         Event_table.writelines('\n' + row_format.format(*header))
         Event_table.writelines(80 * '-' + '\n')
@@ -1935,7 +1952,7 @@ def get_Events(input, request):
         print '\nCouldn\'t write catalog object to ASCII file as:\n>>:\t %s\n' \
               'Proceed without ..\n' % err
               
-    # output catalogue as QUAKEML / JSON files
+    # output catalog as QUAKEML / JSON files
     try:
         catalog.write(
             os.path.join(eventpath, 'EVENTS-INFO', 'catalog.ml'),
@@ -1944,7 +1961,7 @@ def get_Events(input, request):
             os.path.join(eventpath, 'EVENTS-INFO', 'catalog.json'),
             format="JSON")
     except Exception as err:
-        print '\nCouldn\'t write catalog object to file as:\n>>:\t %s\n' \
+        print '\nCouldn\'t write catalog object to file as:\n>>:\t%s\n' \
               'Proceed without ..\n' % err
 
     return events
@@ -1952,49 +1969,34 @@ def get_Events(input, request):
 # ##################### events_info #####################################
 
 
-def events_info(request):
+def events_info(input):
     """
-    Get the event(s) info for event-based or continuous requests
+    Get the event(s) info for 'event-based' or 'continuous' requests.
+    :param input:
+    :return: events, catalog
     """
 
-    global input
-    successful_read = 0
-
+    global events
     if input['waveform'] == 'N':
         print '\nYou' \
               ' specifed "--event_info"\nand also data request.'   \
               '\nProceed without downloading files !\n'
-
-    if request == 'event-based':
+              
+    if input['request'] == 'event-based':
         try:
-        
-            print 'Specified catalog:\t\t', input['event_catalog']
-
-            # if: read event file ; else make url request for events
+            print 'Specified bulletin:\t\t%s' % input['event_catalog']
+            
+            # if: read catalog file
             if input['read_catalog'] != 'N':
-                          
-                try:
-                    events_QML = readEvents(input['read_catalog'])
-                    print 'Read events from catalog:\n' \
-                          '>>:\t%s' % input['read_catalog']
-                    successful_read = 1
-                except TypeError as err:
-                    print '\n\033[91mData format not supported,\033[0m' \
-                          ' tried to read file:\n>>:\t', input['read_catalog']
-                    print '\nFor valid data formats, see:'
-                    print 'obspyDMT -h | grep --read_catalog'
-                    return                          
-                except IOError as err:
-                    print '\n\033[91mStated file does not exist:\033[0m\n' \
-                          '>>:\t', err
-                    return      
-                except Exception as err:
-                    print '\n\033[91mSomething went terribly wrong:\033[0m\n' \
-                          '>>:\t', err
-                    return      
+                catalog = read_catalog( input['read_catalog'] )        
+                
+            # elif "--merge_catalogs" option activated
+            elif input['files']:
+            	catalog = merge_catalogs( input['files'] )
 
+			# else retrieve catalog from event-bases request
             else:
-                print 'Event(s) are based on:\t%s' % input['event_url']
+                print 'Event(s) are based on:\t\t%s' % input['event_url']
 				
                 evlatmin = input['evlatmin']
                 evlatmax = input['evlatmax']
@@ -2007,7 +2009,7 @@ def events_info(request):
                 evradmin = input['evradmin']
 
                 client_fdsn = Client_fdsn(base_url=input['event_url'])
-                events_QML = client_fdsn.get_events(
+                catalog = client_fdsn.get_events(
                     minlatitude=evlatmin,
                     maxlatitude=evlatmax,
                     minlongitude=evlonmin,
@@ -2026,20 +2028,24 @@ def events_info(request):
                     catalog=input['event_catalog'],
                     magnitudetype=input['mag_type'])
 
-            # no matter if list was passed or requested, sort catalogue, 
-            # plot events and proceed
-            events_QML = sort_catalogue(events_QML)  
+			# abort condition if catalog is empty (meaning something went
+			# wrong reading the catalog(s).)
+            if len(catalog) == 0:
+                return -12345, -12345
+            catalog = set_catalog(catalog)
+            catalog = sort_catalog(catalog)
             try:
                 if input['plot_all_events']:
                     plt.ion()
-                    events_QML.plot()
+                    catalog.plot()
             except:
                 pass
 
+			# extract most important info from catalog and store in 'events' 
             events = []
-            for i in range(len(events_QML)):
-                event_time = events_QML.events[i].preferred_origin().time or \
-                             events_QML.events[i].origins[0].time
+            for i in range(len(catalog)):
+                event_time = catalog.events[i].preferred_origin().time or \
+                             catalog.events[i].origins[0].time
                 if event_time.month < 10:
                     event_time_month = '0' + str(event_time.month)
                 else:
@@ -2052,27 +2058,27 @@ def events_info(request):
                 events.append(OrderedDict(
                     [('number', i+1),
                      ('latitude',
-                      events_QML.events[i].preferred_origin().latitude or
-                      events_QML.events[i].origins[0].latitude),
+                      catalog.events[i].preferred_origin().latitude or
+                      catalog.events[i].origins[0].latitude),
                      ('longitude',
-                      events_QML.events[i].preferred_origin().longitude or
-                      events_QML.events[i].origins[0].longitude),
+                      catalog.events[i].preferred_origin().longitude or
+                      catalog.events[i].origins[0].longitude),
                      ('depth',
-                      events_QML.events[i].preferred_origin().depth/1000. or
-                      events_QML.events[i].origins[0].depth/1000.),
+                      catalog.events[i].preferred_origin().depth/1000. or
+                      catalog.events[i].origins[0].depth/1000.),
                      ('datetime', event_time),
                      ('magnitude',
-                      events_QML.events[i].preferred_magnitude().mag or
-                      events_QML.events[i].magnitudes[0].mag),
+                      catalog.events[i].preferred_magnitude().mag or
+                      catalog.events[i].magnitudes[0].mag),
                      ('magnitude_type',
-                      events_QML.events[i].preferred_magnitude().magnitude_type.lower() or
-                      events_QML.events[i].magnitudes[0].magnitude_type.lower()),
-                     ('author', events_QML.events[i].preferred_magnitude().creation_info.author or
-                      events_QML.events[i].magnitudes[0].creation_info.author),
+                      catalog.events[i].preferred_magnitude().magnitude_type.lower() or
+                      catalog.events[i].magnitudes[0].magnitude_type.lower()),
+                     ('author', catalog.events[i].preferred_magnitude().creation_info.author or
+                      catalog.events[i].magnitudes[0].creation_info.author),
                      ('event_id', str(event_time.year) +
                       event_time_month + event_time_day + '_' + str(i+1)),
-                     ('origin_id', events_QML.events[i].preferred_origin_id or
-                      events_QML.events[i].origins[0].resource_id.resource_id),
+                     ('origin_id', catalog.events[i].preferred_origin_id or
+                      catalog.events[i].origins[0].resource_id.resource_id),
                      ('flynn_region', 'NAN'),
                      ]))
 
@@ -2096,13 +2102,13 @@ def events_info(request):
             print 'ERROR: %s' % e
             print 60*'-'
             events = []
-            events_QML = Catalog(events=[])
+            catalog = Catalog(events=[])
 
         for i in range(len(events)):
             events[i]['t1'] = events[i]['datetime'] - input['preset']
             events[i]['t2'] = events[i]['datetime'] + input['offset']
 
-    elif request == 'continuous':
+    elif input['request'] == 'continuous':
 
         if input['read_catalog'] != 'N':
             print '\n\033[91mContradictory options chosen:\033[0m\nYou ' \
@@ -2173,8 +2179,9 @@ def events_info(request):
                  ('t2', M_date),
                  ]))
         print 'DONE'
-        events_QML = Catalog(events=[])
-    return events, events_QML, successful_read
+        catalog = Catalog(events=[])
+        
+    return events, catalog
 
 # ##################### seismicity ######################################
 
@@ -4308,29 +4315,13 @@ def plot_dt(input, address_events):
                                          % (client_time.split('_')[1],
                                             input['plot_format'])))
 
-# ##################### sort_catalogue ############################
-
-
-def sort_catalogue(cat):
-    """
-    Sort catalogue of retrieved events chronological.
-    :param cat:
-    :return:
-    """
-    k = [[event, event.origins[0].time] for event in cat]
-    k.sort(key=lambda x: x[1], reverse=True)
-    events = [event[0] for event in k]
-    cat = Catalog(events=events)
-    return cat
-
 # ##################### event_spaces ############################
 
 
-def event_spaces(events, request):
+def event_spaces(events):
     """
     calculate spaces used for table (shell ouput)
     :param events:
-    :param request:
     :return:
     """
     events2 = copy.deepcopy(events)
@@ -4361,7 +4352,7 @@ def event_spaces(events, request):
             print 'WARNING: %s' % e
             pass
         try:
-            if request == 'continuous':
+            if input['request'] == 'continuous':
                 del events2[i]['flynn_region']
                 header = ['#N', 'LAT', 'LON', 'DEP', 'DATETIME', 'MAG',
                           'AUTH', 'EV_ID']
@@ -4379,7 +4370,7 @@ def event_spaces(events, request):
                 events2[i]['longitude'] = \
                     "{:>8.3f}".format(float(events2[i]['longitude']))
                 events2[i]['depth'] = \
-                    int(round(float(events2[i]['depth'])/1000))
+                    round(float(events2[i]['depth'])/1000.,1)
         except Exception, e:
             print 'WARNING: %s' % e
             pass
@@ -4405,18 +4396,22 @@ def delete_events(events, catalog):
     delete-event procedure
     :param events:
     :param catalog:
-    :return:
+    :return: events, catalog
     """
     garbage = []
     ev_num = raw_input(
-        'Type the number of event you wish not to proceed with, '
-        'then hit >Enter<.\nTo delete all events but number x, y .. '
-        'type:  >!x[, y, z ..]<.\nTo proceed without making a selection, '
-        'hit >Enter< now:\t')
-    while re.search(r"\A\s*\d+\s*\Z|\A\s*!\s*\d+(\s*,\s*\d+)*\s*\Z", ev_num):
-        if ev_num.strip()[0] == '!':
-            keep = [int(i) for i in ev_num.strip().strip('!').split(',')]
+        'Type the number of event you wish to delete, then hit >Enter<.\n'
+        'Alternatively, type: >x, y, ..<\n'
+        'To delete all events but KEEP number x, y .. type: >!x, y, ..<\n'
+        'To proceed without making a selection, hit >Enter< now:\t')
+    while re.search(r"\A\s*\d+\s*,?\s*\Z|\A\s*!?\s*\d+(\s*(,|\s*|,\s*)\d+)*\s*\Z", ev_num):
+    	ev_num = ev_num.replace(',',' ')
+        if ev_num.lstrip()[0] == '!':
+            keep = [int(i) for i in ev_num.strip('!').split()]
             garbage = [i for i in range(1, len(events)+1) if i not in keep]
+            break
+        elif len( ev_num.strip('!').split() ) > 1:
+            garbage = [int(i) for i in ev_num.strip('!').split()]
             break
         else:
             if int(ev_num) < 1 or int(ev_num) > len(events): break
@@ -4435,12 +4430,105 @@ def delete_events(events, catalog):
             del events[ev_out-1]
             catalog.__delitem__(ev_out-1)
         if len(events) == 0:
-            sys.exit('\nExit, seems like the catalog is '
-                     'empty now. Try Again.')
+            sys.exit('\033[91mExit, seems like the catalog is '
+                     'empty now.\nLeave. Try again!\033[0m\n')
     else:
         print
 
-    return garbage
+    return events, catalog
+    
+# ##################### set_catalog ############################ 
+
+
+def set_catalog(catalog):
+    """
+    Remove events in catalog which exist twice or more
+    :param catalog:
+    :return: catalog
+    """
+        
+    # remove double events
+    cata = Catalog( events=[] )
+    for event in catalog:
+    	if event not in cata:
+    		cata.append(event)
+    	#else:		# case you'd like to know which events are double
+    	#	print event     
+    return cata
+    
+# ##################### sort_catalog ############################
+
+
+def sort_catalog(catalog):
+    """
+    Sort catalog of retrieved events chronological.
+    :param cat:
+    :return: catalog
+    """
+    
+    k = [[event, event.origins[0].time] for event in catalog]
+    k.sort(key=lambda x: x[1], reverse=input['reverse'])
+    events = [event[0] for event in k]
+    catalog = Catalog(events=events)
+    return catalog
+        
+# ##################### merge_catalogs ######################################
+
+
+def merge_catalogs(files):
+    """
+    Merge different, existing event catalogs together, sort them. 
+    After, finish obspyDMT normally.
+    :param files:
+    :return: catalog
+    """
+
+    catalogs = []
+    final_catalog = Catalog( events=[] )
+    
+    # read catalogs one by one
+    for file in files:
+    	catalog = read_catalog(file)
+        catalogs.append(catalog)
+    
+    # merge them into one
+    for catalog in catalogs:
+        final_catalog += catalog 	
+    
+    return final_catalog
+    
+
+# ##################### read_catalog ############################
+
+def read_catalog(file):
+    """
+    Read catalog files.
+    :param catalog:
+    :return: catalog
+    """
+
+    catalog = Catalog( events=[] ) 
+    try:    
+        catalog = readEvents(file)
+        print 'Read event(s) from catalog:\n' \
+              '>>:\t%s\n' % file
+        successful_read = 1
+        return catalog
+    except TypeError as err:
+        print '\033[91mData format not supported,\033[0m' \
+              ' tried to read file:\n>>:\t%s\n' \
+              'For valid data formats, see:' \
+              'obspyDMT -h | grep --read_catalog\n' % file
+        return catalog                     
+    except IOError as err:
+        print '\033[91mStated file does not exist:\033[0m\n' \
+              '>>:\t%s\n' % err
+        return catalog
+    except Exception as err:
+        print '\033[91mSomething went terribly wrong:\033[0m\n' \
+              '>>:\t%s\n' % err
+        return catalog                     
+
 
 # ##################### create_folders_files ############################
 
@@ -4660,6 +4748,8 @@ def rm_duplicate(all_sta_avail, address):
 def read_station_event(address):
     """
     Reads the station_event file ("info" folder)
+    :param adress:
+    :return: sta_ev (lists in list)
     """
 
     if not os.path.isabs(address):
